@@ -35,6 +35,8 @@
 #include <QtCore>
 
 namespace MaliitKeyboard {
+constexpr int MAX_SURROUNDING_TEXT_LENGTH = 1024 * 1024; // 1MB in characters
+
 namespace Model {
 
 class Text

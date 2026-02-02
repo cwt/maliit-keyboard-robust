@@ -34,6 +34,7 @@
 #include "logic/abstractlanguagefeatures.h"
 
 #include <QElapsedTimer>
+#include <QDebug>
 
 namespace MaliitKeyboard {
 
@@ -990,11 +991,25 @@ QString AbstractTextEditor::wordLeftOfCursor() const
     Q_D(const AbstractTextEditor);
 
     const QString leftSurrounding = d->text->surroundingLeft();
+
+    // Check for empty string to prevent accessing out-of-bounds
+    if (leftSurrounding.isEmpty()) {
+        return QString();
+    }
+
     int idx = leftSurrounding.length() - 1;
-    while (idx >= 0 && !d->word_engine->languageFeature()->isSeparator(leftSurrounding.at(idx))) {
+    // Additional bounds checking to prevent accessing outside the string
+    while (idx >= 0 && idx < leftSurrounding.length() && !d->word_engine->languageFeature()->isSeparator(leftSurrounding.at(idx))) {
         --idx;
     }
     int length = d->text->surroundingOffset() - idx;
+
+    // Ensure we don't try to access more characters than available
+    if (length > leftSurrounding.length()) {
+        length = leftSurrounding.length();
+    } else if (length < 0) {
+        length = 0;
+    }
 
     return leftSurrounding.right(length);
 }
@@ -1029,11 +1044,16 @@ void AbstractTextEditor::singleBackspace()
     QString textOnLeft = d->text->surroundingLeft();
 
     if (d->text->preedit().isEmpty()) {
-        in_word = textOnLeft.right(1) != QLatin1String(" ");
+        // Check if textOnLeft is not empty before accessing its last character
+        if (!textOnLeft.isEmpty()) {
+            in_word = textOnLeft.right(1) != QLatin1String(" ");
+        }
         sendKeyPressAndReleaseEvents(Qt::Key_Backspace, Qt::NoModifier);
         // Deletion of surrounding text isn't updated in the model until later
         // Update it locally here for autocaps detection
-        textOnLeft.chop(1);
+        if (!textOnLeft.isEmpty()) {
+            textOnLeft.chop(1);
+        }
     } else {
         in_word = true;
         d->text->removeFromPreedit(1);
@@ -1058,7 +1078,7 @@ void AbstractTextEditor::singleBackspace()
         }
     }
 
-    if (in_word && textOnLeft.right(1) == QLatin1String(" ")) {
+    if (in_word && !textOnLeft.isEmpty() && textOnLeft.right(1) == QLatin1String(" ")) {
         // We were in a word, but now we're not, so we've just finished deleting a word
         d->deleted_words++;
     }
@@ -1232,13 +1252,24 @@ void AbstractTextEditor::checkPreeditReentry(bool uncommittedDelete)
     }
 
     int currentOffset = text()->surroundingOffset();
+    // Check bounds to prevent buffer overflows when accessing surrounding text
     if(currentOffset > 1 && currentOffset <= text()->surrounding().size()) {
         QString lastChar;
         if(uncommittedDelete) {
             // -2 for just deleted character that hasn't been committed and to reach character before cursor
-            lastChar = text()->surrounding().at(currentOffset-2);
+            // Additional bounds check to prevent accessing outside the string
+            if (currentOffset >= 2) {
+                lastChar = text()->surrounding().at(currentOffset-2);
+            } else {
+                return; // Invalid offset, exit early
+            }
         } else {
-            lastChar = text()->surrounding().at(currentOffset-1);
+            // Additional bounds check to prevent accessing outside the string
+            if (currentOffset >= 1) {
+                lastChar = text()->surrounding().at(currentOffset-1);
+            } else {
+                return; // Invalid offset, exit early
+            }
         }
         if(!QRegExp(R"(\W+)").exactMatch(lastChar) && !d->word_engine->languageFeature()->isSymbol(lastChar)) {
             QStringList leftWords = text()->surroundingLeft().trimmed().split(QRegExp(R"([\s\d]+)"));

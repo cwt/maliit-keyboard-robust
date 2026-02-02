@@ -453,6 +453,15 @@ void InputMethod::update()
     int position;
     bool ok = d->host->surroundingText(text, position);
     if (ok) {
+        // Validate the surrounding text length to prevent buffer overflows
+        if (text.length() > ::MaliitKeyboard::MAX_SURROUNDING_TEXT_LENGTH) {
+            qWarning() << "Surrounding text too long, truncating from" << text.length() << "to" << ::MaliitKeyboard::MAX_SURROUNDING_TEXT_LENGTH;
+            text = text.left(::MaliitKeyboard::MAX_SURROUNDING_TEXT_LENGTH);
+            // Adjust position if it's beyond the new text length
+            if (position > text.length()) {
+                position = text.length();
+            }
+        }
         d->editor.text()->setSurrounding(text);
         d->editor.text()->setSurroundingOffset(position);
 
@@ -513,6 +522,14 @@ void InputMethod::checkAutocaps()
         QString text;
         int position;
         bool ok = d->host->surroundingText(text, position);
+        // Apply the same validation as in update()
+        if (text.length() > ::MaliitKeyboard::MAX_SURROUNDING_TEXT_LENGTH) {
+            qWarning() << "Surrounding text too long in checkAutocaps, truncating from" << text.length() << "to" << ::MaliitKeyboard::MAX_SURROUNDING_TEXT_LENGTH;
+            text = text.left(::MaliitKeyboard::MAX_SURROUNDING_TEXT_LENGTH);
+            if (position > text.length()) {
+                position = text.length();
+            }
+        }
         QString textOnLeft = d->editor.text()->surroundingLeft() + d->editor.text()->preedit();
         if (textOnLeft.contains(QLatin1String("\n"))) {
             textOnLeft = textOnLeft.split(QStringLiteral("\n")).last();

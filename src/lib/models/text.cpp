@@ -30,6 +30,7 @@
  */
 
 #include "text.h"
+#include <QDebug>
 
 //! \class Text
 //! \brief Represents the text state of the editor
@@ -152,7 +153,13 @@ QString Text::surroundingRight() const
 //! \param surrounding the updated surrounding text.
 void Text::setSurrounding(const QString &surrounding)
 {
-    m_surrounding = surrounding;
+    // Validate the surrounding text length to prevent buffer overflows
+    if (surrounding.length() > ::MaliitKeyboard::MAX_SURROUNDING_TEXT_LENGTH) {
+        qWarning() << "Surrounding text too long, truncating from" << surrounding.length() << "to" << ::MaliitKeyboard::MAX_SURROUNDING_TEXT_LENGTH;
+        m_surrounding = surrounding.left(::MaliitKeyboard::MAX_SURROUNDING_TEXT_LENGTH);
+    } else {
+        m_surrounding = surrounding;
+    }
 }
 
 //! Returns offset of cursor position in surrounding text.
@@ -166,7 +173,12 @@ uint Text::surroundingOffset() const
 //! \param offset the updated offset.
 void Text::setSurroundingOffset(uint offset)
 {
-    m_surrounding_offset = offset;
+    // Ensure the offset doesn't exceed the length of the surrounding text to prevent buffer overflows
+    if (offset > static_cast<uint>(m_surrounding.length())) {
+        m_surrounding_offset = m_surrounding.length();
+    } else {
+        m_surrounding_offset = offset;
+    }
 }
 
 //! Returns face of preedit.
