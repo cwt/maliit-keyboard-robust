@@ -37,6 +37,7 @@
 #include <qglobal.h>
 #include <QDebug>
 #include <QQuickStyle>
+#include <QDir>
 
 #include <memory>
 
@@ -332,7 +333,7 @@ public:
 
     void closeOskWindow()
     {
-        if (!view->isVisible())
+        if (!view || !view->isVisible())
             return;
 
         host->notifyImInitiatedHiding();
@@ -341,6 +342,67 @@ public:
 
         editor.clearPreedit();
 
+        // Destroy the view to free GPU resources
         view->setVisible(false);
+        view->destroy();  // This releases GPU resources
+        delete view;
+        view = nullptr;
+    }
+
+    QQuickView* ensureViewExists()
+    {
+        if (!view) {
+            view = createWindow(host);
+            
+            // Reinitialize necessary connections
+            m_device->setWindow(view);
+
+            // Set window state
+            view->setWindowState(Qt::WindowNoState);
+
+            QSurfaceFormat format = view->format();
+            format.setAlphaBufferSize(8);
+            view->setFormat(format);
+            view->setColor(QColor(Qt::transparent));
+
+            // Update languages paths
+            updateLanguagesPaths();
+
+            // Set up QML engine import paths
+            QQmlEngine *const engine(view->engine());
+            QString prefix = qgetenv("KEYBOARD_PREFIX_PATH");
+            if (!prefix.isEmpty()) {
+                engine->addImportPath(prefix + QDir::separator() + MALIIT_KEYBOARD_QML_DIR);
+                engine->addImportPath(prefix + QDir::separator() + QStringLiteral(MALIIT_KEYBOARD_QML_DIR) + QDir::separator() + "keys");
+            } else {
+                engine->addImportPath(MALIIT_KEYBOARD_QML_DIR);
+                engine->addImportPath(QStringLiteral(MALIIT_KEYBOARD_QML_DIR) + QDir::separator() + "keys");
+            }
+
+            // Register types again if needed
+            registerTypes();
+
+            // workaround: resizeMode not working in current qpa implementation
+            view->setResizeMode(QQuickView::SizeRootObjectToView);
+
+            if (QGuiApplication::platformName() == QLatin1String("ubuntumirclient")) {
+                view->setFlags(InputMethodWindowType); /* Mir-only OSK window type */
+            }
+
+            // When keyboard geometry changes, update the window's input mask
+            QObject::connect(m_geometry, &KeyboardGeometry::visibleRectChanged, view, [this]() {
+                view->setMask(m_geometry->visibleRect().toRect());
+            });
+
+            // Load the QML source - use the same path as in constructor
+            const QString g_maliit_keyboard_qml(MALIIT_KEYBOARD_QML_DIR "/Keyboard.qml");
+            prefix = qgetenv("KEYBOARD_PREFIX_PATH");
+            if (!prefix.isEmpty()) {
+                view->setSource(QUrl::fromLocalFile(prefix + QDir::separator() + g_maliit_keyboard_qml));
+            } else {
+                view->setSource(QUrl::fromLocalFile(g_maliit_keyboard_qml));
+            }
+        }
+        return view;
     }
 };

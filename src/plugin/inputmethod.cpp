@@ -160,8 +160,11 @@ void InputMethod::show()
 
     if(!d->m_settings.stayHidden()) {
         d->m_geometry->setShown(true);
+        d->ensureViewExists(); // Ensure view exists before showing
         update();
-        d->view->setVisible(true);
+        if (d->view) {
+            d->view->setVisible(true);
+        }
     }
 }
 
