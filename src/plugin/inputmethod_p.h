@@ -104,6 +104,7 @@ public:
     QString currentPluginPath;
 
     bool animationEnabled = true;
+    bool viewDestroying = false;
 
     explicit InputMethodPrivate(InputMethod * const _q,
                                 MAbstractInputMethodHost *host)
@@ -335,78 +336,103 @@ public:
 
     void closeOskWindow()
     {
-        if (!view || !view->isVisible())
+        if (!view || !view->isVisible() || viewDestroying)
             return;
 
-        host->notifyImInitiatedHiding();
-        host->setScreenRegion(QRegion());
-        host->setInputMethodArea(QRect(), nullptr);
+        // Mark view as being destroyed FIRST to prevent ANY callbacks
+        // Keep this flag set until the InputMethod destructor runs
+        viewDestroying = true;
+
+        // Disconnect ALL signals IMMEDIATELY before any other operations
+        // This prevents framework signals from triggering callbacks during cleanup
+        QObject::disconnect(m_geometry, nullptr, nullptr, nullptr);
+        QObject::disconnect(host, nullptr, q, nullptr);
+
+        // Hide the view first
+        view->setVisible(false);
 
         m_geometry->setShown(false);
 
         editor.clearPreedit();
 
-        // Destroy the view to free GPU resources
-        view->setVisible(false);
-        view->destroy();  // This releases GPU resources
+        // Notify host AFTER disconnecting signals
+        // Order matters: disconnect first, then notify
+        host->notifyImInitiatedHiding();
+        host->setScreenRegion(QRegion());
+        host->setInputMethodArea(QRect(), nullptr);
+
+        // Schedule view for deletion instead of immediate deletion
+        // This allows any pending QML execution (like onCompleted handlers)
+        // to finish before the view is actually destroyed.
+        // DO NOT call setSource(QUrl()) here - that would destroy QML objects
+        // while onCompleted handlers are still executing, causing use-after-free.
+        // The QML will be cleaned up properly when deleteLater() processes.
         m_device->setWindow(nullptr);
-        delete view;
+        view->deleteLater();
         view = nullptr;
+
+        // Don't reset viewDestroying here - keep it set until destructor runs
+        // This prevents any late-arriving signals from accessing destroyed objects
     }
 
     QQuickView* ensureViewExists()
     {
-        if (!view) {
-            view = createWindow(host);
-            
-            // Reinitialize necessary connections
-            m_device->setWindow(view);
+        if (view || viewDestroying)
+            return view;
 
-            // Set window state
-            view->setWindowState(Qt::WindowNoState);
+        // Reset the destroying flag since we're creating a new view
+        viewDestroying = false;
 
-            QSurfaceFormat format = view->format();
-            format.setAlphaBufferSize(8);
-            view->setFormat(format);
-            view->setColor(QColor(Qt::transparent));
+        view = createWindow(host);
 
-            // Update languages paths
-            updateLanguagesPaths();
+        // Reinitialize necessary connections
+        m_device->setWindow(view);
 
-            // Set up QML engine import paths
-            QQmlEngine *const engine(view->engine());
-            QString prefix = qgetenv("KEYBOARD_PREFIX_PATH");
-            if (!prefix.isEmpty()) {
-                engine->addImportPath(prefix + QDir::separator() + MALIIT_KEYBOARD_QML_DIR);
-                engine->addImportPath(prefix + QDir::separator() + QStringLiteral(MALIIT_KEYBOARD_QML_DIR) + QDir::separator() + "keys");
-            } else {
-                engine->addImportPath(MALIIT_KEYBOARD_QML_DIR);
-                engine->addImportPath(QStringLiteral(MALIIT_KEYBOARD_QML_DIR) + QDir::separator() + "keys");
-            }
+        // Set window state
+        view->setWindowState(Qt::WindowNoState);
 
-            // workaround: resizeMode not working in current qpa implementation
-            view->setResizeMode(QQuickView::SizeRootObjectToView);
+        QSurfaceFormat format = view->format();
+        format.setAlphaBufferSize(8);
+        view->setFormat(format);
+        view->setColor(QColor(Qt::transparent));
 
-            if (QGuiApplication::platformName() == QLatin1String("ubuntumirclient")) {
-                view->setFlags(InputMethodWindowType); /* Mir-only OSK window type */
-            }
+        // Update languages paths
+        updateLanguagesPaths();
 
-            // When keyboard geometry changes, update the window's input mask
-            QObject::connect(m_geometry, &KeyboardGeometry::visibleRectChanged, view, [this]() {
-                if (view) {
-                    view->setMask(m_geometry->visibleRect().toRect());
-                }
-            });
-
-            // Load the QML source - use the same path as in constructor
-            const QString g_maliit_keyboard_qml(MALIIT_KEYBOARD_QML_DIR "/Keyboard.qml");
-            prefix = qgetenv("KEYBOARD_PREFIX_PATH");
-            if (!prefix.isEmpty()) {
-                view->setSource(QUrl::fromLocalFile(prefix + QDir::separator() + g_maliit_keyboard_qml));
-            } else {
-                view->setSource(QUrl::fromLocalFile(g_maliit_keyboard_qml));
-            }
+        // Set up QML engine import paths
+        QQmlEngine *const engine(view->engine());
+        QString prefix = qgetenv("KEYBOARD_PREFIX_PATH");
+        if (!prefix.isEmpty()) {
+            engine->addImportPath(prefix + QDir::separator() + MALIIT_KEYBOARD_QML_DIR);
+            engine->addImportPath(prefix + QDir::separator() + QStringLiteral(MALIIT_KEYBOARD_QML_DIR) + QDir::separator() + "keys");
+        } else {
+            engine->addImportPath(MALIIT_KEYBOARD_QML_DIR);
+            engine->addImportPath(QStringLiteral(MALIIT_KEYBOARD_QML_DIR) + QDir::separator() + "keys");
         }
+
+        // workaround: resizeMode not working in current qpa implementation
+        view->setResizeMode(QQuickView::SizeRootObjectToView);
+
+        if (QGuiApplication::platformName() == QLatin1String("ubuntumirclient")) {
+            view->setFlags(InputMethodWindowType); /* Mir-only OSK window type */
+        }
+
+        // When keyboard geometry changes, update the window's input mask
+        QObject::connect(m_geometry, &KeyboardGeometry::visibleRectChanged, view, [this]() {
+            if (view && !viewDestroying) {
+                view->setMask(m_geometry->visibleRect().toRect());
+            }
+        });
+
+        // Load the QML source - use the same path as in constructor
+        const QString g_maliit_keyboard_qml(MALIIT_KEYBOARD_QML_DIR "/Keyboard.qml");
+        prefix = qgetenv("KEYBOARD_PREFIX_PATH");
+        if (!prefix.isEmpty()) {
+            view->setSource(QUrl::fromLocalFile(prefix + QDir::separator() + g_maliit_keyboard_qml));
+        } else {
+            view->setSource(QUrl::fromLocalFile(g_maliit_keyboard_qml));
+        }
+
         return view;
     }
 };

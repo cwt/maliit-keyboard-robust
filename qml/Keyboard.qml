@@ -221,12 +221,18 @@ Item {
                     keypad.closeExtendedKeys();
                     keypad.activeKeypadState = "NORMAL";
                     keypad.state = "CHARACTERS";
-                    Keyboard.close();
                     canvas.hidingComplete = true;
                     reportKeyboardVisibleRect();
-                    
+
                     // Exit cursor swipe mode when the keyboard hides
                     fullScreenItem.exitSwipeMode();
+
+                    // Defer Keyboard.close() to avoid re-entrancy crash.
+                    // Calling close() synchronously from onCompleted causes
+                    // the framework to emit signals during destruction while
+                    // QML is still executing, leading to use-after-free.
+                    // Qt.callLater ensures close() runs after onCompleted returns.
+                    Qt.callLater(Keyboard.close);
                 }
                 // Wait for the first show operation to complete before
                 // allowing hiding, as the conditions when the keyboard

@@ -148,23 +148,34 @@ InputMethod::InputMethod(MAbstractInputMethodHost *host)
     d->view->setGeometry(qGuiApp->primaryScreen()->geometry());
     connect(qGuiApp->primaryScreen(), &QScreen::geometryChanged,
             this, [this, d](const QRect &geometry) {
-        if (d->view) {
+        if (d->view && !d->viewDestroying) {
             d->view->setGeometry(geometry);
         }
     });
 }
 
-InputMethod::~InputMethod() = default;
+InputMethod::~InputMethod()
+{
+    Q_D(InputMethod);
+    // Mark as destroying to prevent any callbacks from accessing destroyed objects
+    d->viewDestroying = true;
+    // Disconnect from host to prevent framework from calling into us during destruction
+    d->host->disconnect(this);
+}
 
 void InputMethod::show()
 {
     Q_D(InputMethod);
 
+    // Guard against showing during destruction
+    if (d->viewDestroying)
+        return;
+
     if(!d->m_settings.stayHidden()) {
         d->m_geometry->setShown(true);
         d->ensureViewExists(); // Ensure view exists before showing
         update();
-        if (d->view) {
+        if (d->view && !d->viewDestroying) {
             d->view->setVisible(true);
         }
     }
@@ -185,6 +196,9 @@ void InputMethod::hide()
 void InputMethod::close()
 {
     Q_D(InputMethod);
+    // Guard against re-entry during destruction
+    if (d->viewDestroying)
+        return;
     d->closeOskWindow();
 }
 
@@ -699,6 +713,10 @@ void InputMethod::onVisibleRectChanged()
 {
     Q_D(InputMethod);
 
+    // Guard against accessing view during destruction
+    if (d->viewDestroying)
+        return;
+
     QRect visibleRect = d->m_geometry->visibleRect().toRect();
 
     if (d->m_settings.disableHeight() &&
@@ -707,7 +725,7 @@ void InputMethod::onVisibleRectChanged()
     }
 
     inputMethodHost()->setScreenRegion(QRegion(visibleRect));
-    if (d->view) {
+    if (d->view && !d->viewDestroying) {
         inputMethodHost()->setInputMethodArea(visibleRect, d->view);
     } else {
         inputMethodHost()->setInputMethodArea(visibleRect, nullptr);
