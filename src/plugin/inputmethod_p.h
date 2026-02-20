@@ -104,7 +104,6 @@ public:
     QString currentPluginPath;
 
     bool animationEnabled = true;
-    bool viewDestroying = false;
 
     explicit InputMethodPrivate(InputMethod * const _q,
                                 MAbstractInputMethodHost *host)
@@ -336,52 +335,31 @@ public:
 
     void closeOskWindow()
     {
-        if (!view || !view->isVisible() || viewDestroying)
+        if (!view || !view->isVisible())
             return;
 
-        // Mark view as being destroyed FIRST to prevent ANY callbacks
-        // Keep this flag set until the InputMethod destructor runs
-        viewDestroying = true;
-
-        // Disconnect ALL signals IMMEDIATELY before any other operations
-        // This prevents framework signals from triggering callbacks during cleanup
-        QObject::disconnect(m_geometry, nullptr, nullptr, nullptr);
-        QObject::disconnect(host, nullptr, q, nullptr);
-
-        // Hide the view first
+        // Hide the view
         view->setVisible(false);
 
         m_geometry->setShown(false);
 
         editor.clearPreedit();
 
-        // Notify host AFTER disconnecting signals
-        // Order matters: disconnect first, then notify
+        // Notify host that we're hiding
         host->notifyImInitiatedHiding();
         host->setScreenRegion(QRegion());
         host->setInputMethodArea(QRect(), nullptr);
 
-        // Schedule view for deletion instead of immediate deletion
-        // This allows any pending QML execution (like onCompleted handlers)
-        // to finish before the view is actually destroyed.
-        // DO NOT call setSource(QUrl()) here - that would destroy QML objects
-        // while onCompleted handlers are still executing, causing use-after-free.
-        // The QML will be cleaned up properly when deleteLater() processes.
-        m_device->setWindow(nullptr);
-        view->deleteLater();
-        view = nullptr;
-
-        // Don't reset viewDestroying here - keep it set until destructor runs
-        // This prevents any late-arriving signals from accessing destroyed objects
+        // Note: We keep the view around instead of destroying it.
+        // This avoids the overhead and complexity of recreating the view
+        // on every hide/show cycle. The view will be properly cleaned up
+        // when the InputMethod is destroyed.
     }
 
     QQuickView* ensureViewExists()
     {
-        if (view || viewDestroying)
+        if (view)
             return view;
-
-        // Reset the destroying flag since we're creating a new view
-        viewDestroying = false;
 
         view = createWindow(host);
 
@@ -419,7 +397,7 @@ public:
 
         // When keyboard geometry changes, update the window's input mask
         QObject::connect(m_geometry, &KeyboardGeometry::visibleRectChanged, view, [this]() {
-            if (view && !viewDestroying) {
+            if (view) {
                 view->setMask(m_geometry->visibleRect().toRect());
             }
         });
